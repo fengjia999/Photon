@@ -1,0 +1,50 @@
+# Photon Bridge
+
+A transport-only Photon Spectrum bridge for AI Memory Gateway. It does not run
+an agent or a model.
+
+Inbound text DMs from the configured iMessage handles are forwarded to the
+gateway's streaming OpenAI-compatible chat route. Public `reasoning_content`
+is sent first as separate `（...）` bubbles; opaque `reasoning_details` needed
+for tool continuation are never displayed. Final assistant output is split on
+newlines, and every non-empty line is sent as a separate iMessage bubble.
+`POST /notify` sends proactive heartbeat notifications to `PHOTON_HOME_USER`
+using the same bubble rule.
+
+The bridge also advertises conversation-local frontend tools to the gateway.
+The model may add a native Tapback to the current inbound message or send its
+answer as threaded iMessage bubbles with an optional native effect. These
+actions execute inside the bridge so message and chat identifiers never need
+to be exposed as model arguments. If no native reply tool is used, the final
+model text is sent as ordinary bubbles as before.
+
+## Environment
+
+```env
+SPECTRUM_PROJECT_ID=...
+SPECTRUM_PROJECT_SECRET=...
+PHOTON_HOME_USER=primary@example.com
+PHOTON_ALLOWED_USERS=primary@example.com,secondary@example.com
+MEMORY_GATEWAY_URL=https://your-memory-gateway.example
+MEMORY_GATEWAY_SECRET=...
+BRIDGE_SECRET=use-a-different-strong-secret
+PORT=8080
+MAX_BUBBLE_CHARACTERS=3000
+```
+
+`PHOTON_HOME_USER` chooses the iMessage address used for proactive sends.
+`PHOTON_ALLOWED_USERS` controls which phone numbers or email addresses may send
+inbound prompts. Replies stay in the conversation that sent the prompt.
+
+Set the gateway's `PHOTON_NOTIFY_URL` to this service's `/notify` URL and
+`PHOTON_NOTIFY_SECRET` to `BRIDGE_SECRET`. The bridge explicitly requests a
+stream, independent of the gateway's `FORCE_STREAM` default. Because tool
+lists are frozen per conversation, switch to a newly created conversation
+after the gateway and bridge restart before expecting the iMessage tools to
+appear.
+
+## Zeabur
+
+Deploy this repository as a separate service. No custom root directory is
+needed. The included Dockerfile builds and starts the service. `/health` is an
+unauthenticated health check; `/notify` requires the bridge bearer token.
