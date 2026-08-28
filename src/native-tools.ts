@@ -3,6 +3,15 @@ import { effect, imessage } from "@spectrum-ts/imessage";
 
 import { splitBubbles } from "./bubbles.js";
 
+export type PaceBubble = (
+  conversationId: string,
+  send: () => Promise<unknown>,
+) => Promise<void>;
+
+const sendImmediately: PaceBubble = async (_conversationId, send) => {
+  await send();
+};
+
 export type EffectName =
   | "none"
   | "loud"
@@ -135,6 +144,7 @@ export async function executeIMessageFrontendTool(
   call: FrontendToolCall,
   message: Message,
   maxBubbleCharacters: number,
+  paceBubble: PaceBubble = sendImmediately,
 ): Promise<FrontendToolResult> {
   const name = String(call.function?.name || "");
   const input = parseArguments(call);
@@ -162,9 +172,12 @@ export async function executeIMessageFrontendTool(
     for (let index = 0; index < bubbles.length; index += 1) {
       const bubble = bubbles[index];
       if (effectName === "none" || index > 0) {
-        await message.reply(bubble);
+        await paceBubble(message.space.id, () => message.reply(bubble));
       } else {
-        await message.reply(effect(bubble, messageEffects[effectName]));
+        await paceBubble(
+          message.space.id,
+          () => message.reply(effect(bubble, messageEffects[effectName])),
+        );
       }
     }
     return {

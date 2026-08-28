@@ -5,6 +5,7 @@ import { Spectrum } from "@spectrum-ts/core";
 import { effect, imessage } from "@spectrum-ts/imessage";
 
 import { splitBubbles } from "./bubbles.js";
+import { BubblePacer } from "./bubble-pacer.js";
 import { readGatewayStream } from "./gateway-stream.js";
 import { gatewayInboundForMessage } from "./inbound-message.js";
 import {
@@ -13,6 +14,7 @@ import {
   messageEffects,
   type EffectName,
   type FrontendToolResult,
+  type PaceBubble,
 } from "./native-tools.js";
 
 function requiredEnv(name: string): string {
@@ -49,6 +51,14 @@ const maxBubbleCharacters =
   Number.isFinite(configuredMaxBubbleCharacters) && configuredMaxBubbleCharacters > 0
     ? configuredMaxBubbleCharacters
     : 3000;
+const configuredBubbleDelayMs = Number.parseInt(process.env.BUBBLE_DELAY_MS || "1000", 10);
+const bubbleDelayMs = Number.isFinite(configuredBubbleDelayMs)
+  ? Math.max(1000, configuredBubbleDelayMs)
+  : 1000;
+const bubblePacer = new BubblePacer(bubbleDelayMs);
+const paceBubble: PaceBubble = async (conversationId, send) => {
+  await bubblePacer.send(conversationId, send);
+};
 const configuredMaxImageBytes = Number.parseInt(
   process.env.MAX_IMAGE_BYTES || String(5 * 1024 * 1024),
   10,
@@ -104,7 +114,9 @@ async function sendReasoningBubbles(
   reasoning: string,
 ): Promise<void> {
   const bubbles = splitBubbles(reasoning.trim(), Math.max(1, maxBubbleCharacters - 2));
-  for (const bubble of bubbles) await sourceMessage.reply(`（${bubble}）`);
+  for (const bubble of bubbles) {
+    await paceBubble(sourceMessage.space.id, () => sourceMessage.reply(`（${bubble}）`));
+  }
 }
 
 async function askGateway(
@@ -157,6 +169,7 @@ async function askGateway(
             call,
             sourceMessage,
             maxBubbleCharacters,
+            paceBubble,
           );
         } catch (error) {
           outcome = {
@@ -189,9 +202,9 @@ async function sendNotification(text: string, effectName: EffectName): Promise<n
   for (let index = 0; index < bubbles.length; index += 1) {
     const bubble = bubbles[index];
     if (effectName === "none" || index > 0) {
-      await space.send(bubble);
+      await paceBubble(space.id, () => space.send(bubble));
     } else {
-      await space.send(effect(bubble, messageEffects[effectName]));
+      await paceBubble(space.id, () => space.send(effect(bubble, messageEffects[effectName])));
     }
   }
   return bubbles.length;
@@ -281,7 +294,9 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
           const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState);
           if (!turnState.sentReply) {
             const bubbles = splitBubbles(answer, maxBubbleCharacters);
-            for (const bubble of bubbles) await space.send(bubble);
+            for (const bubble of bubbles) {
+              await paceBubble(space.id, () => space.send(bubble));
+            }
           }
         } catch (error) {
           if (!turnState.sentReply) throw error;
@@ -290,7 +305,7 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       });
     } catch (error) {
       console.error("[inbound] turn failed", error);
-      await space.send("⚠️ 记忆网关暂时没有响应。");
+      await paceBubble(space.id, () => space.send("⚠️ 记忆网关暂时没有响应。"));
     }
   }
 }

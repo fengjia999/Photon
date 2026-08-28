@@ -9,6 +9,7 @@ function fakeMessage() {
   const reactions: string[] = [];
   const replies: unknown[] = [];
   const message = {
+    space: { id: "chat-1" },
     async react(value: string) {
       reactions.push(value);
       return undefined;
