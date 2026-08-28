@@ -9,7 +9,8 @@ is sent first as separate `（...）` bubbles; opaque `reasoning_details` needed
 for tool continuation are never displayed. Final assistant output is split on
 newlines, and every non-empty line is sent as a separate iMessage bubble.
 `POST /notify` sends proactive heartbeat notifications to `PHOTON_HOME_USER`
-using the same bubble rule.
+using the same bubble rule. Inbound Tapbacks are forwarded with their emoji
+and a short summary of the message that was reacted to.
 
 The bridge also advertises conversation-local frontend tools to the gateway.
 The model may add a native Tapback to the current inbound message or send its
@@ -23,8 +24,8 @@ model text is sent as ordinary bubbles as before.
 ```env
 SPECTRUM_PROJECT_ID=...
 SPECTRUM_PROJECT_SECRET=...
-PHOTON_HOME_USER=primary@example.com
-PHOTON_ALLOWED_USERS=primary@example.com,secondary@example.com
+PHOTON_HOME_USER=+8613812345678
+PHOTON_ALLOWED_USERS=+8613812345678,+14155552671
 MEMORY_GATEWAY_URL=https://your-memory-gateway.example
 MEMORY_GATEWAY_SECRET=...
 BRIDGE_SECRET=use-a-different-strong-secret
@@ -32,9 +33,9 @@ PORT=8080
 MAX_BUBBLE_CHARACTERS=3000
 ```
 
-`PHOTON_HOME_USER` chooses the iMessage address used for proactive sends.
-`PHOTON_ALLOWED_USERS` controls which phone numbers or email addresses may send
-inbound prompts. Replies stay in the conversation that sent the prompt.
+`PHOTON_HOME_USER` chooses the E.164 phone number used for proactive sends.
+`PHOTON_ALLOWED_USERS` controls which E.164 phone numbers may send inbound
+prompts. Replies stay in the conversation that sent the prompt.
 
 Set the gateway's `PHOTON_NOTIFY_URL` to this service's `/notify` URL and
 `PHOTON_NOTIFY_SECRET` to `BRIDGE_SECRET`. The bridge explicitly requests a

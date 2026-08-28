@@ -6,6 +6,7 @@ import { effect, imessage } from "@spectrum-ts/imessage";
 
 import { splitBubbles } from "./bubbles.js";
 import { readGatewayStream } from "./gateway-stream.js";
+import { gatewayInboundForMessage } from "./inbound-message.js";
 import {
   executeIMessageFrontendTool,
   imessageFrontendTools,
@@ -240,9 +241,8 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       + ` type=${message.content.type} sender=${maskHandle(message.sender?.id || "")}`,
     );
     if (message.platform !== "imessage" || message.direction === "outbound") continue;
-    if (message.content.type !== "text") continue;
+    if (message.content.type !== "text" && message.content.type !== "reaction") continue;
     if (isDuplicate(message.id)) continue;
-    const incomingText = message.content.text;
 
     const imSpace = imessage(space);
     const imMessage = imessage(message);
@@ -256,12 +256,14 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       continue;
     }
     console.log(`[inbound] accepted sender=${maskHandle(sender)}`);
+    const inbound = gatewayInboundForMessage(message);
+    if (!inbound) continue;
 
     try {
       const turnState: GatewayTurnState = { sentReply: false };
       await space.responding(async () => {
         try {
-          const answer = await askGateway(incomingText, message, turnState);
+          const answer = await askGateway(inbound.text, inbound.sourceMessage, turnState);
           if (!turnState.sentReply) {
             const bubbles = splitBubbles(answer, maxBubbleCharacters);
             for (const bubble of bubbles) await space.send(bubble);
