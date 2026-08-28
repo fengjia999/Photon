@@ -24,6 +24,11 @@ function normalizeHandle(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function maskHandle(value: string): string {
+  const normalized = normalizeHandle(value);
+  return normalized ? `***${normalized.slice(-4)}` : "(unknown)";
+}
+
 const projectId = requiredEnv("SPECTRUM_PROJECT_ID");
 const projectSecret = requiredEnv("SPECTRUM_PROJECT_SECRET");
 const homeUser = requiredEnv("PHOTON_HOME_USER");
@@ -228,7 +233,12 @@ function isDuplicate(messageId: string): boolean {
 }
 
 async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
+  console.log("[inbound] waiting for messages");
   for await (const [space, message] of spectrumApp.messages) {
+    console.log(
+      `[inbound] received platform=${message.platform} direction=${message.direction}`
+      + ` type=${message.content.type} sender=${maskHandle(message.sender?.id || "")}`,
+    );
     if (message.platform !== "imessage" || message.direction === "outbound") continue;
     if (message.content.type !== "text") continue;
     if (isDuplicate(message.id)) continue;
@@ -237,7 +247,15 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
     const imSpace = imessage(space);
     const imMessage = imessage(message);
     const sender = normalizeHandle(imMessage.sender?.address || message.sender?.id || "");
-    if (imSpace.type !== "dm" || !allowedUsers.has(sender)) continue;
+    if (imSpace.type !== "dm") {
+      console.log("[inbound] ignored non-DM message");
+      continue;
+    }
+    if (!allowedUsers.has(sender)) {
+      console.warn(`[inbound] ignored unauthorized sender=${maskHandle(sender)}`);
+      continue;
+    }
+    console.log(`[inbound] accepted sender=${maskHandle(sender)}`);
 
     try {
       const turnState: GatewayTurnState = { sentReply: false };
@@ -279,6 +297,10 @@ async function startSpectrum(): Promise<void> {
       providers: [imessage.config()],
     });
     console.log("[spectrum] connected");
+    console.log(
+      `[config] home=${maskHandle(homeUser)}`
+      + ` allowed=${Array.from(allowedUsers, maskHandle).join(",")}`,
+    );
     await runInbound(app);
     if (!shuttingDown) throw new Error("Photon message stream ended");
   } catch (error) {
