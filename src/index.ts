@@ -113,10 +113,9 @@ async function sendReasoningBubbles(
   sourceMessage: Parameters<typeof executeIMessageFrontendTool>[1],
   reasoning: string,
 ): Promise<void> {
-  const bubbles = splitBubbles(reasoning.trim(), Math.max(1, maxBubbleCharacters - 2));
-  for (const bubble of bubbles) {
-    await paceBubble(sourceMessage.space.id, () => sourceMessage.reply(`（${bubble}）`));
-  }
+  const bubble = reasoning.trim();
+  if (!bubble) return;
+  await paceBubble(sourceMessage.space.id, () => sourceMessage.reply(`（${bubble}）`));
 }
 
 async function askGateway(
