@@ -7,7 +7,7 @@ Inbound text DMs from the configured iMessage handles are forwarded to the
 gateway's streaming OpenAI-compatible chat route. Public `reasoning_content`
 is sent first as separate `（...）` bubbles; opaque `reasoning_details` needed
 for tool continuation are never displayed. Final assistant output is split on
-newlines, and every non-empty line is sent as a separate iMessage bubble.
+commas, periods, and newlines, with punctuation kept in the preceding bubble.
 `POST /notify` sends proactive heartbeat notifications to `PHOTON_HOME_USER`
 using the same bubble rule. Inbound Tapbacks are forwarded with their emoji
 and a short summary of the message that was reacted to.
