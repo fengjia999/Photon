@@ -50,12 +50,9 @@ const allowedUsers = new Set(
     .filter(Boolean),
 );
 
-const app = await Spectrum({
-  projectId,
-  projectSecret,
-  providers: [imessage.config()],
-});
-const im = imessage(app);
+type SpectrumApp = Awaited<ReturnType<typeof Spectrum>>;
+let app: SpectrumApp | null = null;
+let shuttingDown = false;
 
 function isAuthorized(request: IncomingMessage): boolean {
   const actual = Buffer.from(request.headers.authorization || "");
@@ -168,6 +165,8 @@ async function askGateway(
 }
 
 async function sendNotification(text: string, effectName: EffectName): Promise<number> {
+  if (!app) throw new Error("Photon is still connecting");
+  const im = imessage(app);
   const user = await im.user(homeUser);
   const space = await im.space.create(user);
   const bubbles = splitBubbles(text, maxBubbleCharacters);
@@ -187,7 +186,7 @@ async function sendNotification(text: string, effectName: EffectName): Promise<n
 const server = createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/health") {
-      json(response, 200, { status: "ok" });
+      json(response, 200, { status: app ? "ok" : "starting" });
       return;
     }
     if (request.method !== "POST" || request.url !== "/notify") {
@@ -228,8 +227,8 @@ function isDuplicate(messageId: string): boolean {
   return false;
 }
 
-async function runInbound(): Promise<void> {
-  for await (const [space, message] of app.messages) {
+async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
+  for await (const [space, message] of spectrumApp.messages) {
     if (message.platform !== "imessage" || message.direction === "outbound") continue;
     if (message.content.type !== "text") continue;
     if (isDuplicate(message.id)) continue;
@@ -263,11 +262,33 @@ async function runInbound(): Promise<void> {
 
 async function shutdown(signal: string): Promise<void> {
   console.log(`[shutdown] ${signal}`);
+  shuttingDown = true;
   server.close();
-  await app.stop();
+  if (app) await app.stop();
   process.exit(0);
 }
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
 
-await runInbound();
+async function startSpectrum(): Promise<void> {
+  try {
+    console.log("[spectrum] connecting");
+    app = await Spectrum({
+      projectId,
+      projectSecret,
+      providers: [imessage.config()],
+    });
+    console.log("[spectrum] connected");
+    await runInbound(app);
+    if (!shuttingDown) throw new Error("Photon message stream ended");
+  } catch (error) {
+    if (shuttingDown) return;
+    console.error("[spectrum] startup failed", error);
+    if (app) await app.stop().catch(() => undefined);
+    app = null;
+    server.close();
+    process.exitCode = 1;
+  }
+}
+
+void startSpectrum();
