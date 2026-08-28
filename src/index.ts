@@ -49,6 +49,14 @@ const maxBubbleCharacters =
   Number.isFinite(configuredMaxBubbleCharacters) && configuredMaxBubbleCharacters > 0
     ? configuredMaxBubbleCharacters
     : 3000;
+const configuredMaxImageBytes = Number.parseInt(
+  process.env.MAX_IMAGE_BYTES || String(5 * 1024 * 1024),
+  10,
+);
+const maxImageBytes =
+  Number.isFinite(configuredMaxImageBytes) && configuredMaxImageBytes > 0
+    ? configuredMaxImageBytes
+    : 5 * 1024 * 1024;
 const allowedUsers = new Set(
   (process.env.PHOTON_ALLOWED_USERS || homeUser)
     .split(",")
@@ -100,11 +108,11 @@ async function sendReasoningBubbles(
 }
 
 async function askGateway(
-  text: string,
+  userContent: string | Array<Record<string, unknown>>,
   sourceMessage: Parameters<typeof executeIMessageFrontendTool>[1],
   state: GatewayTurnState,
 ): Promise<string> {
-  let messages: Array<Record<string, unknown>> = [{ role: "user", content: text }];
+  let messages: Array<Record<string, unknown>> = [{ role: "user", content: userContent }];
   const completedCalls = new Map<string, FrontendToolResult>();
 
   for (let round = 0; round < 8; round += 1) {
@@ -241,7 +249,12 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       + ` type=${message.content.type} sender=${maskHandle(message.sender?.id || "")}`,
     );
     if (message.platform !== "imessage" || message.direction === "outbound") continue;
-    if (message.content.type !== "text" && message.content.type !== "reaction") continue;
+    if (
+      message.content.type !== "text"
+      && message.content.type !== "reaction"
+      && message.content.type !== "attachment"
+      && message.content.type !== "group"
+    ) continue;
     if (isDuplicate(message.id)) continue;
 
     const imSpace = imessage(space);
@@ -256,14 +269,16 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       continue;
     }
     console.log(`[inbound] accepted sender=${maskHandle(sender)}`);
-    const inbound = gatewayInboundForMessage(message);
-    if (!inbound) continue;
-
     try {
+      const inbound = await gatewayInboundForMessage(message, maxImageBytes);
+      if (!inbound) {
+        console.log(`[inbound] ignored unsupported content type=${message.content.type}`);
+        continue;
+      }
       const turnState: GatewayTurnState = { sentReply: false };
       await space.responding(async () => {
         try {
-          const answer = await askGateway(inbound.text, inbound.sourceMessage, turnState);
+          const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState);
           if (!turnState.sentReply) {
             const bubbles = splitBubbles(answer, maxBubbleCharacters);
             for (const bubble of bubbles) await space.send(bubble);

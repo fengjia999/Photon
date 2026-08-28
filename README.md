@@ -31,11 +31,16 @@ MEMORY_GATEWAY_SECRET=...
 BRIDGE_SECRET=use-a-different-strong-secret
 PORT=8080
 MAX_BUBBLE_CHARACTERS=3000
+MAX_IMAGE_BYTES=5242880
 ```
 
 `PHOTON_HOME_USER` chooses the E.164 phone number used for proactive sends.
 `PHOTON_ALLOWED_USERS` controls which E.164 phone numbers may send inbound
 prompts. Replies stay in the conversation that sent the prompt.
+
+Inbound JPEG, PNG, GIF, and WebP images are forwarded as vision input. iPhone
+HEIC/HEIF photos are converted to JPEG automatically. Captions and up to four
+images sent in one iMessage stay together in one gateway turn.
 
 Set the gateway's `PHOTON_NOTIFY_URL` to this service's `/notify` URL and
 `PHOTON_NOTIFY_SECRET` to `BRIDGE_SECRET`. The bridge explicitly requests a
