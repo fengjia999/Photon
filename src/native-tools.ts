@@ -155,7 +155,12 @@ export async function executeIMessageFrontendTool(
     if (!tapback) throw new Error("unsupported Tapback");
     await message.react(tapback);
     return {
-      result: JSON.stringify({ ok: true, reaction }),
+      result: JSON.stringify({
+        ok: true,
+        action: "tapback",
+        reaction,
+        glyph: tapback,
+      }),
       sentReply: false,
     };
   }
@@ -181,7 +186,15 @@ export async function executeIMessageFrontendTool(
       }
     }
     return {
-      result: JSON.stringify({ ok: true, bubbles: bubbles.length, effect: effectName }),
+      // Keep the result self-contained. The gateway persists it, so later turns
+      // and proactive heartbeats can tell exactly what the user received.
+      result: JSON.stringify({
+        ok: true,
+        action: "reply",
+        text,
+        bubbles: bubbles.length,
+        effect: effectName,
+      }),
       sentReply: true,
     };
   }

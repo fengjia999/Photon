@@ -34,6 +34,12 @@ test("Tapback tool maps semantic reaction names to native glyphs", async () => {
 
   assert.deepEqual(reactions, ["👍"]);
   assert.equal(outcome.sentReply, false);
+  assert.deepEqual(JSON.parse(outcome.result), {
+    ok: true,
+    action: "tapback",
+    reaction: "like",
+    glyph: "👍",
+  });
 });
 
 test("native reply tool threads every non-empty bubble", async () => {
@@ -48,7 +54,13 @@ test("native reply tool threads every non-empty bubble", async () => {
 
   assert.deepEqual(replies, ["one", "two"]);
   assert.equal(outcome.sentReply, true);
-  assert.match(outcome.result, /"bubbles":2/);
+  assert.deepEqual(JSON.parse(outcome.result), {
+    ok: true,
+    action: "reply",
+    text: "one\n\ntwo",
+    bubbles: 2,
+    effect: "none",
+  });
 });
 
 test("native reply applies an effect only to the first bubble", async () => {

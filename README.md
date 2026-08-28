@@ -19,6 +19,10 @@ answer as threaded iMessage bubbles with an optional native effect. These
 actions execute inside the bridge so message and chat identifiers never need
 to be exposed as model arguments. If no native reply tool is used, the final
 model text is sent as ordinary bubbles as before.
+Successful native actions return a self-contained result (including reply text or
+Tapback details) to the gateway. The gateway persists that result and mirrors the
+user-visible action into conversation history so later heartbeat checks know what
+was already sent.
 
 ## Environment
 
