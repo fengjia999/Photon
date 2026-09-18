@@ -10,6 +10,7 @@ import { readGatewayStream } from "./gateway-stream.js";
 import { gatewayInboundForMessage } from "./inbound-message.js";
 import { SettingsStore } from "./settings.js";
 import { adminHtml } from "./admin.js";
+import { loadCurrentPoll, type CurrentPoll } from "./polls.js";
 import {
   executeIMessageFrontendTool,
   imessageFrontendTools,
@@ -117,10 +118,13 @@ type GatewayTurnState = {
 async function sendReasoningBubbles(
   sourceMessage: Parameters<typeof executeIMessageFrontendTool>[1],
   reasoning: string,
+  isPoll = false,
 ): Promise<void> {
   const bubble = reasoning.trim();
   if (!bubble) return;
-  await paceBubble(sourceMessage.space.id, () => sourceMessage.reply(`（${bubble}）`));
+  await paceBubble(sourceMessage.space.id, () => isPoll
+    ? sourceMessage.space.send(`（${bubble}）`)
+    : sourceMessage.reply(`（${bubble}）`));
 }
 
 async function askGateway(
@@ -128,6 +132,7 @@ async function askGateway(
   sourceMessage: Parameters<typeof executeIMessageFrontendTool>[1],
   state: GatewayTurnState,
   gatewayModel: string,
+  currentPoll?: CurrentPoll,
 ): Promise<string> {
   let messages: Array<Record<string, unknown>> = [{ role: "user", content: userContent }];
   const completedCalls = new Map<string, FrontendToolResult>();
@@ -153,7 +158,8 @@ async function askGateway(
     const streamed = await readGatewayStream(response);
     const assistant = streamed.assistant;
     if (streamed.reasoningContent.trim()) {
-      await sendReasoningBubbles(sourceMessage, streamed.reasoningContent);
+      await sendReasoningBubbles(sourceMessage, streamed.reasoningContent,
+        Boolean(currentPoll) || sourceMessage.content.type === "poll" || sourceMessage.content.type === "poll_option");
     }
     const toolCalls = assistant.tool_calls || [];
     if (!toolCalls.length) {
@@ -175,6 +181,7 @@ async function askGateway(
             sourceMessage,
             maxBubbleCharacters,
             paceBubble,
+            currentPoll,
           );
         } catch (error) {
           outcome = {
@@ -298,6 +305,9 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       && message.content.type !== "reaction"
       && message.content.type !== "attachment"
       && message.content.type !== "group"
+      && message.content.type !== "poll"
+      && message.content.type !== "poll_option"
+      && message.content.type !== "custom"
     ) continue;
     if (isDuplicate(message.id)) continue;
 
@@ -315,7 +325,9 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
     console.log(`[inbound] accepted sender=${maskHandle(sender)}`);
     try {
       const turnSettings = settings.get();
-      const inbound = await gatewayInboundForMessage(message, maxImageBytes, new Date(), turnSettings.timeEnabled);
+      const receivedAt = new Date();
+      const currentPoll = await loadCurrentPoll(spectrumApp, message);
+      const inbound = await gatewayInboundForMessage(message, maxImageBytes, receivedAt, turnSettings.timeEnabled, currentPoll);
       if (!inbound) {
         console.log(`[inbound] ignored unsupported content type=${message.content.type}`);
         continue;
@@ -323,7 +335,7 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       const turnState: GatewayTurnState = { sentReply: false };
       await space.responding(async () => {
         try {
-          const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState, turnSettings.model);
+          const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState, turnSettings.model, currentPoll);
           if (!turnState.sentReply) {
             const bubbles = splitBubbles(answer, maxBubbleCharacters);
             for (const bubble of bubbles) {

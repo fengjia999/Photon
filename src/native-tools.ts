@@ -1,4 +1,5 @@
-import type { Message } from "@spectrum-ts/core";
+import { poll, type Message } from "@spectrum-ts/core";
+import type { CurrentPoll } from "./polls.js";
 import { effect, imessage } from "@spectrum-ts/imessage";
 
 import { splitBubbles } from "./bubbles.js";
@@ -81,6 +82,35 @@ export const imessageFrontendTools = [
   {
     type: "function",
     function: {
+      name: "imessage_send_poll",
+      description: "Send a native poll in the current conversation. Supply a question and 2–10 distinct options. After success the poll is already visible; do not repeat it in ordinary text.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          options: { type: "array", minItems: 2, maxItems: 10, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 100 } },
+        },
+        required: ["title", "options"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "imessage_vote_current_poll",
+      description: "Cast the bridge account's native vote on the poll attached to the current incoming message. Use its numbered options (1-based). Cannot vote on arbitrary historical polls. After success the vote is visible; ordinary final text is not sent.",
+      parameters: {
+        type: "object",
+        properties: { option_index: { type: "integer", minimum: 1 } },
+        required: ["option_index"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "imessage_react_to_current_message",
       description: (
         "Add one native iMessage Tapback to the user's current message. " +
@@ -145,11 +175,40 @@ export async function executeIMessageFrontendTool(
   message: Message,
   maxBubbleCharacters: number,
   paceBubble: PaceBubble = sendImmediately,
+  currentPoll?: CurrentPoll,
 ): Promise<FrontendToolResult> {
   const name = String(call.function?.name || "");
   const input = parseArguments(call);
 
+  if (name === "imessage_send_poll") {
+    const title = typeof input.title === "string" ? input.title.trim() : "";
+    const options = Array.isArray(input.options)
+      ? input.options.map((value) => typeof value === "string" ? value.trim() : "") : [];
+    if (!title || title.length > 200 || options.length < 2 || options.length > 10
+      || options.some((value) => !value || value.length > 100) || new Set(options).size !== options.length) {
+      throw new Error("poll requires a title (1–200 characters) and 2–10 distinct options (1–100 characters each)");
+    }
+    await paceBubble(message.space.id, () => message.space.send(poll(title, options)));
+    return { result: JSON.stringify({ ok: true, action: "poll", title, options }), sentReply: true };
+  }
+
+  if (name === "imessage_vote_current_poll") {
+    if (!currentPoll) throw new Error("no votable poll attached to the current message");
+    const index = input.option_index;
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 1 || index > currentPoll.options.length) {
+      throw new Error("invalid poll option index");
+    }
+    await paceBubble(message.space.id, () => currentPoll.vote(index));
+    return {
+      result: JSON.stringify({ ok: true, action: "poll_vote", title: currentPoll.title, option_index: index, option: currentPoll.options[index - 1] }),
+      sentReply: true,
+    };
+  }
+
   if (name === "imessage_react_to_current_message") {
+    if (currentPoll || message.content?.type === "poll" || message.content?.type === "poll_option") {
+      throw new Error("iMessage polls do not support Tapbacks; use voting or a plain text response");
+    }
     const reaction = String(input.reaction || "") as TapbackName;
     const tapback = tapbacks[reaction];
     if (!tapback) throw new Error("unsupported Tapback");
@@ -166,6 +225,9 @@ export async function executeIMessageFrontendTool(
   }
 
   if (name === "imessage_reply_to_current_message") {
+    if (currentPoll || message.content?.type === "poll" || message.content?.type === "poll_option") {
+      throw new Error("iMessage polls do not support threaded replies; use a plain text response");
+    }
     const text = String(input.text || "").trim();
     if (!text) throw new Error("reply text is required");
     if (text.length > 12000) throw new Error("reply text exceeds 12000 characters");

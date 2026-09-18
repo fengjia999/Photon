@@ -13,6 +13,27 @@ function fakeMessage(content: Message["content"]): Message {
   return { content } as Message;
 }
 
+test("incoming native polls list numbered choices and preserve the source message", async () => {
+  const message = fakeMessage({ type: "text", text: "native poll placeholder" });
+  const context = { title: "晚餐？", options: ["米饭", "面条"], async vote() {} };
+  const inbound = await gatewayInboundForMessage(message, undefined, now, true, context);
+  assert.equal(inbound?.sourceMessage, message);
+  assert.match(String(inbound?.content), /1\. 米饭\n2\. 面条/);
+  assert.match(String(inbound?.content), /imessage_vote_current_poll/);
+  assert.ok(String(inbound?.content).startsWith(prefix));
+});
+
+test("vote and unvote events describe the delta without implying total results", async () => {
+  for (const selected of [true, false]) {
+    const message = fakeMessage({ type: "poll_option", title: "米饭", option: { title: "米饭" },
+      poll: { type: "poll", title: "晚餐？", options: [{ title: "米饭" }, { title: "面条" }] }, selected });
+    const inbound = await gatewayInboundForMessage(message, undefined, now, false);
+    assert.match(String(inbound?.content), selected ? /选择了「米饭」/ : /撤回了「米饭」/);
+    assert.match(String(inbound?.content), /不代表完整投票结果/);
+    assert.doesNotMatch(String(inbound?.content), /current_time=/);
+  }
+});
+
 test("disabling time keeps the conversation marker on text and Tapbacks", async () => {
   const message = fakeMessage({ type: "text", text: "hello" });
   const inbound = await gatewayInboundForMessage(message, undefined, now, false);
@@ -135,4 +156,24 @@ test("HEIC-like image input is converted to a JPEG data URL", async () => {
 
   const inbound = await gatewayInboundForMessage(message);
   assert.match(JSON.stringify(inbound?.content), /data:image\/jpeg;base64,/);
+});
+
+test("unhydrated polls retain their choices but do not advertise native voting", async () => {
+  const message = fakeMessage({ type: "poll", title: "Dinner?", options: [{ title: "Rice" }, { title: "Noodles" }] });
+  const inbound = await gatewayInboundForMessage(message, undefined, now, false);
+  assert.equal(inbound?.sourceMessage, message);
+  assert.equal(inbound?.content, '<conversation_path="iMessage" />\n[iMessage 投票]\nDinner?\n1. Rice\n2. Noodles'
+    + '\n当前消息没有可用的原生投票接口，请用文字回答。\n投票不支持 Tapback 或引用回复。');
+});
+
+test("hydrated custom poll uses Photon choices and leaves unrelated custom messages unsupported", async () => {
+  const message = fakeMessage({ type: "custom", raw: {} });
+  assert.equal(await gatewayInboundForMessage(message, undefined, now, false), null);
+  const inbound = await gatewayInboundForMessage(message, undefined, now, false, {
+    title: "Dinner?", options: ["Rice", "Noodles"], async vote() { assert.fail("formatting must not vote"); },
+  });
+  assert.equal(inbound?.sourceMessage, message);
+  assert.match(String(inbound?.content), /Dinner\?\n1\. Rice\n2\. Noodles/);
+  assert.match(String(inbound?.content), /imessage_vote_current_poll/);
+  assert.doesNotMatch(String(inbound?.content), /current_time=/);
 });

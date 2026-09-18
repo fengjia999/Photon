@@ -1,5 +1,6 @@
 import type { Content, Message } from "@spectrum-ts/core";
 import sharp from "sharp";
+import type { CurrentPoll } from "./polls.js";
 
 export type GatewayUserContent = string | Array<
   | { type: "text"; text: string }
@@ -154,7 +155,21 @@ export async function gatewayInboundForMessage(
   maxImageBytes = 5 * 1024 * 1024,
   now = new Date(),
   timeEnabled = true,
+  currentPoll?: CurrentPoll,
 ): Promise<GatewayInbound | null> {
+  if (currentPoll || message.content.type === "poll") {
+    const title = currentPoll?.title ?? (message.content as Extract<Content, { type: "poll" }>).title;
+    const options = currentPoll?.options ?? (message.content as Extract<Content, { type: "poll" }>).options.map((item) => item.title);
+    const text = `[iMessage 投票]\n${title}\n${options.map((option, index) => `${index + 1}. ${option}`).join("\n")}`
+      + (currentPoll ? "\n可调用 imessage_vote_current_poll，使用以上选项编号投票。" : "\n当前消息没有可用的原生投票接口，请用文字回答。")
+      + "\n投票不支持 Tapback 或引用回复。";
+    return { content: withConversationPrefix(text, now, timeEnabled), sourceMessage: message };
+  }
+  if (message.content.type === "poll_option") {
+    const { poll, option, selected } = message.content;
+    const text = `[iMessage 投票更新]\n用户在「${poll.title}」中${selected ? "选择了" : "撤回了"}「${option.title}」。\n这是选项变动事件，不代表完整投票结果；如需回应，请使用普通文字。`;
+    return { content: withConversationPrefix(text, now, timeEnabled), sourceMessage: message };
+  }
   if (message.content.type === "text") {
     return { content: withConversationPrefix(message.content.text, now, timeEnabled), sourceMessage: message };
   }

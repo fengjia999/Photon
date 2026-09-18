@@ -21,6 +21,23 @@ The timestamp is captured when the bridge processes the inbound message and uses
 server's local timezone.
 
 The bridge also advertises conversation-local frontend tools to the gateway.
+`imessage_send_poll` sends a native poll with `title` (1–200 characters) and
+`options` (2–10 distinct strings, each 1–100 characters). Polls are standalone
+cards, not threaded replies. `imessage_vote_current_poll` accepts `option_index`
+(1-based) to cast the bridge account's vote on the current incoming poll. Neither
+tool accepts arbitrary chat or message IDs. A successful poll send or vote counts
+as a visible reply, so ordinary final assistant text is not sent again.
+
+Incoming poll cards are hydrated from Photon and shown to the model with numbered
+choices. Vote/unvote events are forwarded as individual changes, not vote totals.
+Polls cannot receive Tapbacks or threaded replies; use ordinary text to discuss
+them. Existing DM and sender allowlists still apply. This does not enable groups.
+Voting uses the underlying Photon client through an isolated Spectrum 12.8 runtime
+adapter (`src/polls.ts`); recheck it when upgrading Spectrum. Real-device delivery
+and voting require end-to-end verification with your Photon account.
+The gateway retains structured tool results; its separate visible-history mirror
+currently recognizes only replies and Tapbacks, not the two new poll tools.
+
 The model may add a native Tapback to the current inbound message or send its
 answer as threaded iMessage bubbles with an optional native effect. These
 actions execute inside the bridge so message and chat identifiers never need
