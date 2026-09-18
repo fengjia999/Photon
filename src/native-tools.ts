@@ -49,6 +49,7 @@ export type FrontendToolCall = {
 export type FrontendToolResult = {
   result: string;
   sentReply: boolean;
+  suppressFinalText?: boolean;
 };
 
 export const messageEffects = {
@@ -83,7 +84,7 @@ export const imessageFrontendTools = [
     type: "function",
     function: {
       name: "imessage_send_poll",
-      description: "Send a native poll in the current conversation. Supply a question and 2–10 distinct options. After success the poll is already visible; do not repeat it in ordinary text.",
+      description: "Send a native poll in the current conversation. Supply a question and 2–10 distinct options. After success the poll is already visible; you may add a short ordinary reply without repeating its choices.",
       parameters: {
         type: "object",
         properties: {
@@ -99,7 +100,7 @@ export const imessageFrontendTools = [
     type: "function",
     function: {
       name: "imessage_vote_current_poll",
-      description: "Cast the bridge account's native vote on the poll attached to the current incoming message. Use its numbered options (1-based). Cannot vote on arbitrary historical polls. After success the vote is visible; ordinary final text is not sent.",
+      description: "Cast the bridge account's native vote on the poll attached to the current incoming message. Use its numbered options (1-based). Cannot vote on arbitrary historical polls. After success the vote is visible; you may add an ordinary reply.",
       parameters: {
         type: "object",
         properties: { option_index: { type: "integer", minimum: 1 } },
@@ -189,7 +190,7 @@ export async function executeIMessageFrontendTool(
       throw new Error("poll requires a title (1–200 characters) and 2–10 distinct options (1–100 characters each)");
     }
     await paceBubble(message.space.id, () => message.space.send(poll(title, options)));
-    return { result: JSON.stringify({ ok: true, action: "poll", title, options }), sentReply: true };
+    return { result: JSON.stringify({ ok: true, action: "poll", title, options }), sentReply: true, suppressFinalText: false };
   }
 
   if (name === "imessage_vote_current_poll") {
@@ -202,6 +203,7 @@ export async function executeIMessageFrontendTool(
     return {
       result: JSON.stringify({ ok: true, action: "poll_vote", title: currentPoll.title, option_index: index, option: currentPoll.options[index - 1] }),
       sentReply: true,
+      suppressFinalText: false,
     };
   }
 

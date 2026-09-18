@@ -26,14 +26,19 @@ The bridge also advertises conversation-local frontend tools to the gateway.
 cards, not threaded replies. `imessage_vote_current_poll` accepts `option_index`
 (1-based) to cast the bridge account's vote on the current incoming poll. Neither
 tool accepts arbitrary chat or message IDs. A successful poll send or vote counts
-as a visible reply, so ordinary final assistant text is not sent again.
+as a visible action and still allows a subsequent ordinary assistant reply.
+Only an actual threaded text reply suppresses duplicate final text.
 
 Incoming poll cards are hydrated from Photon and shown to the model with numbered
-choices. Vote/unvote events are forwarded as individual changes, not vote totals.
+choices. The bridge also subscribes directly to native poll events, since Spectrum
+12.8 does not forward poll creation or option additions. Vote/unvote events are
+forwarded as individual changes, not vote totals. Actorless DM events use the
+peer from the chat GUID, subject to the same allowlist; self and group events are
+ignored. Reconnects replay missed events and deduplicate live/replayed events.
 Polls cannot receive Tapbacks or threaded replies; use ordinary text to discuss
 them. Existing DM and sender allowlists still apply. This does not enable groups.
 Voting uses the underlying Photon client through an isolated Spectrum 12.8 runtime
-adapter (`src/polls.ts`); recheck it when upgrading Spectrum. Real-device delivery
+adapters (`src/polls.ts`, `src/poll-events.ts`); recheck them when upgrading Spectrum. Real-device delivery
 and voting require end-to-end verification with your Photon account.
 The gateway retains structured tool results; its separate visible-history mirror
 currently recognizes only replies and Tapbacks, not the two new poll tools.

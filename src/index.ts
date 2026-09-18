@@ -11,6 +11,8 @@ import { gatewayInboundForMessage } from "./inbound-message.js";
 import { SettingsStore } from "./settings.js";
 import { adminHtml } from "./admin.js";
 import { loadCurrentPoll, type CurrentPoll } from "./polls.js";
+import { GatewayTurnState } from "./turn-state.js";
+import { bridgeInboundMessages } from "./poll-events.js";
 import {
   executeIMessageFrontendTool,
   imessageFrontendTools,
@@ -83,6 +85,7 @@ const allowedUsers = new Set(
 type SpectrumApp = Awaited<ReturnType<typeof Spectrum>>;
 let app: SpectrumApp | null = null;
 let shuttingDown = false;
+let inboundMessages: ReturnType<typeof bridgeInboundMessages> | undefined;
 
 function isAuthorized(request: IncomingMessage): boolean {
   const actual = Buffer.from(request.headers.authorization || "");
@@ -110,10 +113,6 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   }
   return parsed as Record<string, unknown>;
 }
-
-type GatewayTurnState = {
-  sentReply: boolean;
-};
 
 async function sendReasoningBubbles(
   sourceMessage: Parameters<typeof executeIMessageFrontendTool>[1],
@@ -191,7 +190,7 @@ async function askGateway(
         }
         if (callId) completedCalls.set(callId, outcome);
       }
-      state.sentReply ||= outcome.sentReply;
+      state.record(outcome);
       toolResults.push({
         role: "tool",
         tool_call_id: callId,
@@ -294,7 +293,8 @@ function isDuplicate(messageId: string): boolean {
 
 async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
   console.log("[inbound] waiting for messages");
-  for await (const [space, message] of spectrumApp.messages) {
+  inboundMessages = bridgeInboundMessages(spectrumApp, allowedUsers);
+  for await (const [space, message] of inboundMessages) {
     console.log(
       `[inbound] received platform=${message.platform} direction=${message.direction}`
       + ` type=${message.content.type} sender=${maskHandle(message.sender?.id || "")}`,
@@ -309,8 +309,6 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       && message.content.type !== "poll_option"
       && message.content.type !== "custom"
     ) continue;
-    if (isDuplicate(message.id)) continue;
-
     const imSpace = imessage(space);
     const imMessage = imessage(message);
     const sender = normalizeHandle(imMessage.sender?.address || message.sender?.id || "");
@@ -332,11 +330,14 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
         console.log(`[inbound] ignored unsupported content type=${message.content.type}`);
         continue;
       }
-      const turnState: GatewayTurnState = { sentReply: false };
+      // A plain placeholder must not consume the later native poll event.
+      const eventKind = currentPoll || message.content.type === "poll" ? "poll" : "message";
+      if (isDuplicate(`${imSpace.phone}:${space.id}:${message.id}:${eventKind}`)) continue;
+      const turnState = new GatewayTurnState();
       await space.responding(async () => {
         try {
           const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState, turnSettings.model, currentPoll);
-          if (!turnState.sentReply) {
+          if (!turnState.suppressFinalText) {
             const bubbles = splitBubbles(answer, maxBubbleCharacters);
             for (const bubble of bubbles) {
               await paceBubble(space.id, () => space.send(bubble));
@@ -359,6 +360,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   server.close();
   if (app) await app.stop();
+  await inboundMessages?.close();
   process.exit(0);
 }
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -383,6 +385,7 @@ async function startSpectrum(): Promise<void> {
     if (shuttingDown) return;
     console.error("[spectrum] startup failed", error);
     if (app) await app.stop().catch(() => undefined);
+    await inboundMessages?.close().catch(() => undefined);
     app = null;
     server.close();
     process.exitCode = 1;
