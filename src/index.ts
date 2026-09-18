@@ -1,18 +1,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 
-import { Spectrum } from "@spectrum-ts/core";
+import { Spectrum, type Message, type Space } from "@spectrum-ts/core";
 import { effect, imessage } from "@spectrum-ts/imessage";
 
 import { splitBubbles } from "./bubbles.js";
 import { BubblePacer } from "./bubble-pacer.js";
 import { readGatewayStream } from "./gateway-stream.js";
-import { gatewayInboundForMessage } from "./inbound-message.js";
-import { SettingsStore } from "./settings.js";
+import { gatewayInboundForMessage, type GatewayInbound } from "./inbound-message.js";
+import { SettingsStore, type BridgeSettings } from "./settings.js";
 import { adminHtml } from "./admin.js";
 import { loadCurrentPoll, type CurrentPoll } from "./polls.js";
 import { GatewayTurnState } from "./turn-state.js";
 import { bridgeInboundMessages } from "./poll-events.js";
+import { InboundBatcher } from "./inbound-batcher.js";
+import { combineInbound } from "./inbound-batch.js";
 import {
   executeIMessageFrontendTool,
   imessageFrontendTools,
@@ -59,10 +61,10 @@ const maxBubbleCharacters =
   Number.isFinite(configuredMaxBubbleCharacters) && configuredMaxBubbleCharacters > 0
     ? configuredMaxBubbleCharacters
     : 3000;
-const configuredBubbleDelayMs = Number.parseInt(process.env.BUBBLE_DELAY_MS || "1000", 10);
+const configuredBubbleDelayMs = Number.parseInt(process.env.BUBBLE_DELAY_MS || "2000", 10);
 const bubbleDelayMs = Number.isFinite(configuredBubbleDelayMs)
-  ? Math.max(1000, configuredBubbleDelayMs)
-  : 1000;
+  ? Math.max(2000, configuredBubbleDelayMs)
+  : 2000;
 const bubblePacer = new BubblePacer(bubbleDelayMs);
 const paceBubble: PaceBubble = async (conversationId, send) => {
   await bubblePacer.send(conversationId, send);
@@ -291,10 +293,51 @@ function isDuplicate(messageId: string): boolean {
   return false;
 }
 
+type PendingMessage = { app: SpectrumApp; space: Space; message: Message; receivedAt: Date; settings: BridgeSettings };
+const inboundBatcher = new InboundBatcher<PendingMessage>(async (items) => {
+  const last = items[items.length - 1];
+  const prepared: Array<GatewayInbound & { currentPoll?: CurrentPoll }> = [];
+  for (const item of items) {
+    try {
+      const currentPoll = await loadCurrentPoll(item.app, item.message);
+      const inbound = await gatewayInboundForMessage(item.message, maxImageBytes, item.receivedAt, item.settings.timeEnabled, currentPoll);
+      if (!inbound) continue;
+      const eventKind = currentPoll || item.message.content.type === "poll" ? "poll" : "message";
+      const key = `${imessage(item.space).phone}:${item.space.id}:${item.message.id}:${eventKind}`;
+      if (!isDuplicate(key)) prepared.push({ ...inbound, currentPoll });
+    } catch (error) {
+      // One unavailable attachment/poll must not discard the rest of the batch.
+      console.error("[inbound] message preparation failed", error);
+      prepared.push({ sourceMessage: item.message,
+        content: "[iMessage 消息读取失败：这条消息的内容暂时无法获取，请勿猜测。]" });
+    }
+  }
+  if (!prepared.length) return;
+  const inbound = combineInbound(prepared);
+  const turnState = new GatewayTurnState();
+  console.log(`[inbound] sending batch count=${prepared.length}`);
+  try {
+    await last.space.responding(async () => {
+      const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState, last.settings.model, inbound.currentPoll);
+      if (!turnState.suppressFinalText) {
+        for (const bubble of splitBubbles(answer, maxBubbleCharacters)) {
+          await paceBubble(last.space.id, () => last.space.send(bubble));
+        }
+      }
+    });
+  } catch (error) {
+    console.error("[inbound] batch turn failed", error);
+    if (!turnState.sentReply) {
+      await paceBubble(last.space.id, () => last.space.send("⚠️ 记忆网关暂时没有响应。"));
+    }
+  }
+}, (error) => console.error("[inbound] batch failed", error));
+
 async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
   console.log("[inbound] waiting for messages");
   inboundMessages = bridgeInboundMessages(spectrumApp, allowedUsers);
   for await (const [space, message] of inboundMessages) {
+    if (shuttingDown) break;
     console.log(
       `[inbound] received platform=${message.platform} direction=${message.direction}`
       + ` type=${message.content.type} sender=${maskHandle(message.sender?.id || "")}`,
@@ -321,37 +364,10 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       continue;
     }
     console.log(`[inbound] accepted sender=${maskHandle(sender)}`);
-    try {
-      const turnSettings = settings.get();
-      const receivedAt = new Date();
-      const currentPoll = await loadCurrentPoll(spectrumApp, message);
-      const inbound = await gatewayInboundForMessage(message, maxImageBytes, receivedAt, turnSettings.timeEnabled, currentPoll);
-      if (!inbound) {
-        console.log(`[inbound] ignored unsupported content type=${message.content.type}`);
-        continue;
-      }
-      // A plain placeholder must not consume the later native poll event.
-      const eventKind = currentPoll || message.content.type === "poll" ? "poll" : "message";
-      if (isDuplicate(`${imSpace.phone}:${space.id}:${message.id}:${eventKind}`)) continue;
-      const turnState = new GatewayTurnState();
-      await space.responding(async () => {
-        try {
-          const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState, turnSettings.model, currentPoll);
-          if (!turnState.suppressFinalText) {
-            const bubbles = splitBubbles(answer, maxBubbleCharacters);
-            for (const bubble of bubbles) {
-              await paceBubble(space.id, () => space.send(bubble));
-            }
-          }
-        } catch (error) {
-          if (!turnState.sentReply) throw error;
-          console.error("[inbound] continuation failed after native reply", error);
-        }
-      });
-    } catch (error) {
-      console.error("[inbound] turn failed", error);
-      await paceBubble(space.id, () => space.send("⚠️ 记忆网关暂时没有响应。"));
-    }
+    const turnSettings = settings.get();
+    inboundBatcher.add(`${imSpace.phone}:${space.id}`, {
+      app: spectrumApp, space, message, receivedAt: new Date(), settings: turnSettings,
+    }, turnSettings.debounceSeconds * 1000);
   }
 }
 
@@ -359,6 +375,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[shutdown] ${signal}`);
   shuttingDown = true;
   server.close();
+  await inboundBatcher.close();
   if (app) await app.stop();
   await inboundMessages?.close();
   process.exit(0);
@@ -384,6 +401,7 @@ async function startSpectrum(): Promise<void> {
   } catch (error) {
     if (shuttingDown) return;
     console.error("[spectrum] startup failed", error);
+    await inboundBatcher.close();
     if (app) await app.stop().catch(() => undefined);
     await inboundMessages?.close().catch(() => undefined);
     app = null;

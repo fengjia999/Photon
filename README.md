@@ -56,10 +56,17 @@ was already sent.
 ## Management page
 
 Open `/` or `/admin` on the bridge and unlock it with `BRIDGE_SECRET`. The page
-lets you change the reply model ID and enable or disable the timestamp. An empty
+lets you change the reply model ID, enable or disable the timestamp, and adjust
+the silence window (0–300 seconds, default 30). An empty
 model uses the gateway default; the timestamp uses UTC+8 and is enabled by default.
-Disabling it keeps `<conversation_path="iMessage" />`. Saves apply to the next
-inbound message; an in-progress turn keeps its original model through tool calls.
+Disabling it keeps `<conversation_path="iMessage" />`. Each new inbound message
+resets its conversation's silence timer. Once quiet, the ordered messages
+(including images and poll events) are combined into one gateway turn. Messages
+received while replying are buffered for the next turn; turns in the same chat
+never overlap. Set the window to 0 to process messages individually.
+Saves apply from the next inbound message. A batch uses its last message's model;
+an in-progress turn keeps that model through tool calls. Buffers are in memory;
+graceful shutdown flushes them, but a forced termination can lose pending input.
 The key is held only in page memory. Serve the page over HTTPS outside localhost.
 
 Settings are saved atomically to `data/settings.json`, or `BRIDGE_SETTINGS_PATH`
@@ -67,8 +74,8 @@ if configured. Saved values take precedence over the initial `MEMORY_GATEWAY_MOD
 environment default. For Docker/Zeabur, mount a persistent volume at `/app/data`
 so settings survive container replacement and redeployment. Run one bridge process
 per settings file. The authenticated `GET /api/settings` and `PUT /api/settings`
-endpoints use the same bearer key as `/notify` and expose only `model` and
-`timeEnabled`.
+endpoints use the same bearer key as `/notify` and expose `model`, `timeEnabled`,
+and `debounceSeconds`. Existing settings files default to a 30-second window.
 
 ## Environment variables
 
@@ -82,7 +89,7 @@ MEMORY_GATEWAY_SECRET=...
 BRIDGE_SECRET=use-a-different-strong-secret
 PORT=8080
 MAX_BUBBLE_CHARACTERS=3000
-BUBBLE_DELAY_MS=1000
+BUBBLE_DELAY_MS=2000
 MAX_IMAGE_BYTES=5242880
 ```
 
@@ -90,8 +97,9 @@ MAX_IMAGE_BYTES=5242880
 `PHOTON_ALLOWED_USERS` controls which E.164 phone numbers may send inbound
 prompts. Replies stay in the conversation that sent the prompt.
 
-Outgoing bubbles in the same conversation are paced at least one second apart.
-Increase `BUBBLE_DELAY_MS` to use a slower rhythm; values below 1000 are clamped.
+Outgoing bubbles in the same conversation are paced at least two seconds apart,
+measured after each successful send. Increase `BUBBLE_DELAY_MS` to use a slower
+rhythm; values below 2000 are clamped.
 
 Inbound JPEG, PNG, GIF, and WebP images are forwarded as vision input. iPhone
 HEIC/HEIF photos are converted to JPEG automatically. Captions and up to four

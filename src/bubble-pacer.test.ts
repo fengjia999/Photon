@@ -8,7 +8,7 @@ test("bubbles in one conversation are separated by the configured delay", async 
   const waits: number[] = [];
   const sentAt: number[] = [];
   const pacer = new BubblePacer(
-    1000,
+    2000,
     () => now,
     async (milliseconds) => {
       waits.push(milliseconds);
@@ -19,8 +19,8 @@ test("bubbles in one conversation are separated by the configured delay", async 
   await pacer.send("chat-1", async () => sentAt.push(now));
   await pacer.send("chat-1", async () => sentAt.push(now));
 
-  assert.deepEqual(waits, [1000]);
-  assert.deepEqual(sentAt, [100, 1100]);
+  assert.deepEqual(waits, [2000]);
+  assert.deepEqual(sentAt, [100, 2100]);
 });
 
 test("different conversations do not delay each other", async () => {
@@ -40,4 +40,3 @@ test("different conversations do not delay each other", async () => {
 
   assert.deepEqual(waits, []);
 });
-
