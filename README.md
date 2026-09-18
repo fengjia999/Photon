@@ -13,6 +13,13 @@ bubble.
 using the same bubble rule. Inbound Tapbacks are forwarded with their emoji
 and a short summary of the message that was reacted to.
 
+Every forwarded user message (including images and Tapbacks) starts with a
+conversation prefix, for example:
+`<conversation_path="iMessage" current_time="2026-09-18 12:47:05 星期五" />`.
+The timestamp is captured when the bridge processes the inbound message and uses
+`Asia/Shanghai` (UTC+8), with seconds and the Chinese weekday, regardless of the
+server's local timezone.
+
 The bridge also advertises conversation-local frontend tools to the gateway.
 The model may add a native Tapback to the current inbound message or send its
 answer as threaded iMessage bubbles with an optional native effect. These
@@ -24,7 +31,24 @@ Tapback details) to the gateway. The gateway persists that result and mirrors th
 user-visible action into conversation history so later heartbeat checks know what
 was already sent.
 
-## Environment
+## Management page
+
+Open `/` or `/admin` on the bridge and unlock it with `BRIDGE_SECRET`. The page
+lets you change the reply model ID and enable or disable the timestamp. An empty
+model uses the gateway default; the timestamp uses UTC+8 and is enabled by default.
+Disabling it keeps `<conversation_path="iMessage" />`. Saves apply to the next
+inbound message; an in-progress turn keeps its original model through tool calls.
+The key is held only in page memory. Serve the page over HTTPS outside localhost.
+
+Settings are saved atomically to `data/settings.json`, or `BRIDGE_SETTINGS_PATH`
+if configured. Saved values take precedence over the initial `MEMORY_GATEWAY_MODEL`
+environment default. For Docker/Zeabur, mount a persistent volume at `/app/data`
+so settings survive container replacement and redeployment. Run one bridge process
+per settings file. The authenticated `GET /api/settings` and `PUT /api/settings`
+endpoints use the same bearer key as `/notify` and expose only `model` and
+`timeEnabled`.
+
+## Environment variables
 
 ```env
 SPECTRUM_PROJECT_ID=...

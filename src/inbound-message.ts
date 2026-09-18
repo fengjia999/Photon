@@ -26,6 +26,31 @@ const CONVERTIBLE_IMAGE_MIMES = new Set([
 ]);
 const MAX_IMAGES_PER_MESSAGE = 4;
 
+const conversationTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  weekday: "long",
+  hourCycle: "h23",
+});
+
+function withConversationPrefix(content: GatewayUserContent, now: Date, timeEnabled: boolean): GatewayUserContent {
+  const parts = Object.fromEntries(
+    conversationTimeFormatter.formatToParts(now).map(({ type, value }) => [type, value]),
+  );
+  const time = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.weekday}`;
+  const prefix = timeEnabled
+    ? `<conversation_path="iMessage" current_time="${time}" />`
+    : '<conversation_path="iMessage" />';
+  return typeof content === "string"
+    ? `${prefix}\n${content}`
+    : [{ type: "text", text: prefix }, ...content];
+}
+
 function compact(value: string, maxCharacters = 180): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
   const characters = Array.from(normalized);
@@ -127,25 +152,29 @@ async function imageContentForMessage(
 export async function gatewayInboundForMessage(
   message: Message,
   maxImageBytes = 5 * 1024 * 1024,
+  now = new Date(),
+  timeEnabled = true,
 ): Promise<GatewayInbound | null> {
   if (message.content.type === "text") {
-    return { content: message.content.text, sourceMessage: message };
+    return { content: withConversationPrefix(message.content.text, now, timeEnabled), sourceMessage: message };
   }
   if (message.content.type === "reaction") {
     const target = message.content.target;
     const emoji = compact(message.content.emoji, 16) || "Tapback";
     const targetSummary = summarizeContent(target.content);
     return {
-      content: (
+      content: withConversationPrefix(
         `[iMessage Tapback]\n`
-        + `用户对你之前的消息「${targetSummary}」添加了 ${emoji}。`
+        + `用户对你之前的消息「${targetSummary}」添加了 ${emoji}。`,
+        now,
+        timeEnabled,
       ),
       sourceMessage: target,
     };
   }
   if (message.content.type === "attachment" || message.content.type === "group") {
     const content = await imageContentForMessage(message, maxImageBytes);
-    return content ? { content, sourceMessage: message } : null;
+    return content ? { content: withConversationPrefix(content, now, timeEnabled), sourceMessage: message } : null;
   }
   return null;
 }

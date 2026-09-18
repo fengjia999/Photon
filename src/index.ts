@@ -8,6 +8,8 @@ import { splitBubbles } from "./bubbles.js";
 import { BubblePacer } from "./bubble-pacer.js";
 import { readGatewayStream } from "./gateway-stream.js";
 import { gatewayInboundForMessage } from "./inbound-message.js";
+import { SettingsStore } from "./settings.js";
+import { adminHtml } from "./admin.js";
 import {
   executeIMessageFrontendTool,
   imessageFrontendTools,
@@ -38,7 +40,10 @@ const homeUser = requiredEnv("PHOTON_HOME_USER");
 const gatewayUrl = requiredEnv("MEMORY_GATEWAY_URL").replace(/\/+$/, "");
 const gatewaySecret = requiredEnv("MEMORY_GATEWAY_SECRET");
 const bridgeSecret = requiredEnv("BRIDGE_SECRET");
-const gatewayModel = process.env.MEMORY_GATEWAY_MODEL?.trim();
+const settings = await SettingsStore.open(process.env.BRIDGE_SETTINGS_PATH || "data/settings.json", {
+  model: process.env.MEMORY_GATEWAY_MODEL?.trim() || "",
+  timeEnabled: true,
+});
 const configuredPort = Number.parseInt(process.env.PORT || "8080", 10);
 const port = Number.isFinite(configuredPort) && configuredPort > 0
   ? configuredPort
@@ -122,6 +127,7 @@ async function askGateway(
   userContent: string | Array<Record<string, unknown>>,
   sourceMessage: Parameters<typeof executeIMessageFrontendTool>[1],
   state: GatewayTurnState,
+  gatewayModel: string,
 ): Promise<string> {
   let messages: Array<Record<string, unknown>> = [{ role: "user", content: userContent }];
   const completedCalls = new Map<string, FrontendToolResult>();
@@ -211,6 +217,32 @@ async function sendNotification(text: string, effectName: EffectName): Promise<n
 
 const server = createServer(async (request, response) => {
   try {
+    if (request.method === "GET" && (request.url === "/" || request.url === "/admin")) {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      });
+      response.end(adminHtml);
+      return;
+    }
+    if (request.url === "/api/settings") {
+      response.setHeader("cache-control", "no-store");
+      if (!isAuthorized(request)) {
+        json(response, 401, { error: "unauthorized" });
+        return;
+      }
+      if (request.method === "PUT") await settings.save(await readJson(request));
+      else if (request.method !== "GET") {
+        response.setHeader("allow", "GET, PUT");
+        json(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      json(response, 200, settings.get());
+      return;
+    }
     if (request.method === "GET" && request.url === "/health") {
       json(response, 200, { status: app ? "ok" : "starting" });
       return;
@@ -282,7 +314,8 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
     }
     console.log(`[inbound] accepted sender=${maskHandle(sender)}`);
     try {
-      const inbound = await gatewayInboundForMessage(message, maxImageBytes);
+      const turnSettings = settings.get();
+      const inbound = await gatewayInboundForMessage(message, maxImageBytes, new Date(), turnSettings.timeEnabled);
       if (!inbound) {
         console.log(`[inbound] ignored unsupported content type=${message.content.type}`);
         continue;
@@ -290,7 +323,7 @@ async function runInbound(spectrumApp: SpectrumApp): Promise<void> {
       const turnState: GatewayTurnState = { sentReply: false };
       await space.responding(async () => {
         try {
-          const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState);
+          const answer = await askGateway(inbound.content, inbound.sourceMessage, turnState, turnSettings.model);
           if (!turnState.sentReply) {
             const bubbles = splitBubbles(answer, maxBubbleCharacters);
             for (const bubble of bubbles) {

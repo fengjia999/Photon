@@ -6,26 +6,46 @@ import sharp from "sharp";
 
 import { gatewayInboundForMessage } from "./inbound-message.js";
 
+const now = new Date("2026-09-18T04:47:05Z");
+const prefix = '<conversation_path="iMessage" current_time="2026-09-18 12:47:05 星期五" />';
+
 function fakeMessage(content: Message["content"]): Message {
   return { content } as Message;
 }
 
-test("plain text remains a normal gateway prompt", async () => {
+test("disabling time keeps the conversation marker on text and Tapbacks", async () => {
   const message = fakeMessage({ type: "text", text: "hello" });
-  const inbound = await gatewayInboundForMessage(message);
+  const inbound = await gatewayInboundForMessage(message, undefined, now, false);
+  assert.equal(inbound?.content, '<conversation_path="iMessage" />\nhello');
+  const reaction = fakeMessage({ type: "reaction", emoji: "👍", target: message });
+  const tapback = await gatewayInboundForMessage(reaction, undefined, now, false);
+  assert.match(String(tapback?.content), /^<conversation_path="iMessage" \/>\n\[iMessage Tapback\]/);
+  assert.doesNotMatch(String(tapback?.content), /current_time/);
+});
 
-  assert.equal(inbound?.content, "hello");
+test("plain text includes Shanghai time down to seconds and weekday", async () => {
+  const message = fakeMessage({ type: "text", text: "hello" });
+  const inbound = await gatewayInboundForMessage(message, undefined, now);
+
+  assert.equal(inbound?.content, `${prefix}\nhello`);
   assert.equal(inbound?.sourceMessage, message);
+});
+
+test("Shanghai midnight rolls over both the date and weekday using hour 00", async () => {
+  const message = fakeMessage({ type: "text", text: "午夜" });
+  const inbound = await gatewayInboundForMessage(message, undefined, new Date("2026-09-18T16:00:09Z"));
+  assert.equal(inbound?.content,
+    '<conversation_path="iMessage" current_time="2026-09-19 00:00:09 星期六" />\n午夜');
 });
 
 test("Tapback becomes a gateway event targeting the reacted-to message", async () => {
   const target = fakeMessage({ type: "text", text: "one\n two" });
   const reaction = fakeMessage({ type: "reaction", emoji: "❤️", target });
-  const inbound = await gatewayInboundForMessage(reaction);
+  const inbound = await gatewayInboundForMessage(reaction, undefined, now);
 
   assert.equal(
     inbound?.content,
-    "[iMessage Tapback]\n用户对你之前的消息「one two」添加了 ❤️。",
+    `${prefix}\n[iMessage Tapback]\n用户对你之前的消息「one two」添加了 ❤️。`,
   );
   assert.equal(inbound?.sourceMessage, target);
 });
@@ -64,8 +84,9 @@ test("image attachment becomes an OpenAI data URL block", async () => {
     },
   });
 
-  const inbound = await gatewayInboundForMessage(message);
+  const inbound = await gatewayInboundForMessage(message, undefined, now);
   assert.deepEqual(inbound?.content, [
+    { type: "text", text: prefix },
     { type: "text", text: "用户从 iMessage 发来图片。" },
     { type: "image_url", image_url: { url: "data:image/jpeg;base64,YWJj" } },
   ]);
@@ -87,7 +108,8 @@ test("caption and image in a group stay in the same gateway turn", async () => {
   });
   const message = fakeMessage({ type: "group", items: [caption, image] });
 
-  assert.deepEqual((await gatewayInboundForMessage(message))?.content, [
+  assert.deepEqual((await gatewayInboundForMessage(message, undefined, now))?.content, [
+    { type: "text", text: prefix },
     { type: "text", text: "看看这个" },
     { type: "image_url", image_url: { url: "data:image/png;base64,cG5n" } },
   ]);
